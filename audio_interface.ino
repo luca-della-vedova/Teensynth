@@ -809,6 +809,13 @@ PROGMEM const uint16_t midi_plugin[] = { /* Compressed plugin */
 #define MIDI_PLUGIN_SIZE 1036
 };
 
+PROGMEM const uint16_t midistart_plugin[] = { /* Compressed plugin */
+  0x0007, 0x0001, 0x8050, 0x0006, 0x0014, 0x0030, 0x0715, 0xb080, /*    0 */
+  0x3400, 0x0007, 0x9255, 0x3d00, 0x0024, 0x0030, 0x0295, 0x6890, /*    8 */
+  0x3400, 0x0030, 0x0495, 0x3d00, 0x0024, 0x2908, 0x4d40, 0x0030, /*   10 */
+  0x0200, 0x000a, 0x0001, 0x0050,
+#define MIDISTART_PLUGIN_SIZE 28
+};
 
 // Begin audio generated stuff
 #include <Audio.h>
@@ -842,7 +849,7 @@ Adafruit_VS1053 musicPlayer =
   // create breakout-example object!
   Adafruit_VS1053(VS1053_RESET, VS1053_CS, VS1053_DCS, VS1053_DREQ);
 
-#define VS1053_MIDI Serial4
+#define VS1053_MIDI Serial3
 #define VS1053_BANK_MELODY 0x79
 #define VS1053_GM1_OCARINA 80
 
@@ -882,20 +889,11 @@ void midiSetChannelBank(uint8_t chan, uint8_t bank) {
 
 void VS1053_init()
 {
+  delay(100);
   if (! musicPlayer.begin()) { // initialise the music player
       Serial.println(F("Couldn't find VS1053, do you have the right pins defined?"));
   }
   Serial.println("VS1053 found");
-//  VS1053_MIDI.begin(31250); // MIDI uses a 'strange baud rate'
-//  midiSetChannelBank(0, VS1053_BANK_MELODY);
-//  midiSetInstrument(0, VS1053_GM1_OCARINA);
-//  midiSetChannelVolume(0, 127);
-
-//  if (!SD.begin(VS1053_CARDCS)) {
-//    Serial.println("SD failed, or not present");
-//    while (1);  // don't do anything more
-//  }
-//  Serial.println("SD OK!");
 
   // Magic stuff to enable I2S based on datasheet
   musicPlayer.sciWrite(0x7, 0xC017);
@@ -905,61 +903,30 @@ void VS1053_init()
   musicPlayer.sciWrite(0x7, 0xC040);
   // Then WRAM
   musicPlayer.sciWrite(0x6, 0x000E);
-
   musicPlayer.applyPatch(patches_plugin, PATCHES_PLUGIN_SIZE);// Add here
   // Start the patches
   while(digitalRead(VS1053_DREQ) == 0);
-
-//  musicPlayer.applyPatch(midi_plugin, MIDI_PLUGIN_SIZE);// Add here
-  // Start midi plugin
+  musicPlayer.applyPatch(midistart_plugin, MIDISTART_PLUGIN_SIZE);// Add here
+//  // Start midi plugin
 //  musicPlayer.sciWrite(0xA, 0x50);
-//  while(digitalRead(VS1053_DREQ) == 0)
-  {
-    Serial.println("Waiting for midi start");
-  }
-//  delay(100);
+  delay(50);
   
   musicPlayer.applyPatch(admix_plugin, ADMIX_PLUGIN_SIZE);// Add here
 
   // Start the ADMIX plugin
+  // Lower gain
+  musicPlayer.sciWrite(0xC, 0xFFFD);
   musicPlayer.sciWrite(0xA, 0x0F00);
   while(digitalRead(VS1053_DREQ) == 0)
   {
     Serial.println("Waiting for ADMIX start");
   }
-  // Lower gain
-  musicPlayer.sciWrite(0xC, 0xFFFD);
-
+  delay(100);
   
-//  SD.begin(VS1053_CARDCS);    // initialise the SD card
-
-//  musicPlay er.loadPlugin("vs1053b-patches.plg");
-
-  // Set volume for left, right channels. lower numbers == louder volume!
-//  musicPlayer.setVolume(20, 20);
-
-  // If DREQ is on an interrupt pin (on uno, #2 or #3) we can do background
-  // audio playing
-//  musicPlayer.useInterrupt(VS1053_FILEPLAYER_PIN_INT);  // DREQ int
-
-  // Start recording, SCI_MODE PCM, TODO check bit 14 for source
-  // AICTRL 0 is C
-//  musicPlayer.sciWrite(0xC, 48000); // 48kHz
-//  musicPlayer.sciWrite(0xD, 0); // Automatic gain
-//  musicPlayer.sciWrite(0xE, 4096); // Max gin 64x
-//  musicPlayer.sciWrite(0xF, 0); // Stereo,  ADPCM mode
-//  uint16_t ctrl0 = musicPlayer.sciRead(0);
-//  ctrl0 |= (1 << 2); // Soft reset
-//  ctrl0 |= (1 << 12); // PCM recording
-//  ctrl0 |= (1 << 14); // Line 1, default so unnecessary
-// 
-//  
-//  musicPlayer.sciWrite(0x0, ctrl0); // Start recording
-
-
-//  musicPlayer.startPlayingFile("track001.mp3");
-
-//  musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
+  VS1053_MIDI.begin(31250); // MIDI uses a 'strange baud rate'
+  midiSetChannelBank(0, VS1053_BANK_MELODY);
+  midiSetInstrument(0, VS1053_GM1_OCARINA);
+  midiSetChannelVolume(0, 127);
 }
 
 void midiNoteOn(uint8_t chan, uint8_t n, uint8_t vel) {
@@ -1048,7 +1015,7 @@ void samplePitchBend()
     midi1.sendPitchBend(bend_val, 1);
     last_bend_val = bend_val;
   }
-//  test_midi_send();
+  test_midi_send();
 }
 
 void loop() {
