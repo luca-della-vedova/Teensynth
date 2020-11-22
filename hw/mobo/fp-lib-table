@@ -1,0 +1,4 @@
+(fp_lib_table
+  (lib (name teensy_library)(type KiCad)(uri ${KIPRJMOD}/../kicad_modules/teensy.pretty)(options "")(descr ""))
+  (lib (name teensynth)(type KiCad)(uri ${KIPRJMOD}/../kicad_modules/teensynth.pretty)(options "")(descr ""))
+)
