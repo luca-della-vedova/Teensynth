@@ -26,7 +26,7 @@ Streaming audio from the host machine to the onboard DAC should also be possible
 
 The hardware has been designed with kicad, it is a carrier board for  Teensy 4.1 and the Adafruit VS1053B breakout board.
 
-![teensy_rev01_front](/home/luca/hw/Teensynth/docs/teensy_rev01_front.png)
+![teensy_rev01_front](docs/teensy_rev01_front.png)
 
 # Firmware
 
