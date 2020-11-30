@@ -1,63 +1,28 @@
-/* Receive Incoming USB Host MIDI using functions.  As usbMIDI
-   reads incoming messages, handler functions are run.
-   See the InputRead example for the non-function alterative.
+#define PREFER_SDFAT_LIBRARY
+#define FILES_PER_PAGE 10
+#include <array>
 
-   This very long example demonstrates all possible handler
-   functions.  Most applications need only some of these.
-   This example is meant to allow easy copy-and-paste of the
-   desired functions.
-
-   Use the Arduino Serial Monitor to view the messages
-   as Teensy receives them by USB MIDI
-
-   You must select MIDI from the "Tools > USB Type" menu
-
-   This example code is in the public domain.
-*/
+#include <SdFat.h>
 
 #include <USBHost_t36.h>
 #include <Metro.h>
 #include <Adafruit_VS1053.h>
+#include "hw_defs.h"
 #include "vs1053_plugins.h"
+#include "lcd_driver.h"
+
+#include <MD_MIDIHelper.h>
+#include <MD_MIDIFile.h>
 
 USBHost myusb;
 USBHub hub1(myusb);
 USBHub hub2(myusb);
 MIDIDevice midi1(myusb);
 
-// Begin audio generated stuff
-#include <Audio.h>
-#include <Wire.h>
-#include <SPI.h>
-#include <SD.h>
-#include <SerialFlash.h>
-
-// GUItool: begin automatically generated code
-//AudioInputI2S            i2s1;           //xy=55.00000762939453,174.00000762939453
-//AudioMixer4              mixer2;         //xy=225,229
-//AudioMixer4              mixer1;         //xy=236,140
-//AudioOutputUSB           usb1;           //xy=445,142
-//AudioConnection          patchCord1(i2s1, 0, mixer1, 0);
-//AudioConnection          patchCord2(i2s1, 1, mixer2, 0);
-//AudioConnection          patchCord3(mixer2, 0, usb1, 1);
-//AudioConnection          patchCord4(mixer1, 0, usb1, 0);
-// GUItool: end automatically generated code
-
-// Defines for VS1053B board
-#define VS1053_RESET  9      // VS1053 reset pin (output)
-#define VS1053_CS     10     // VS1053 chip select pin (output)
-#define VS1053_DCS    8      // VS1053 Data/command select pin (output)
-
-// These are common pins between breakout and shield
-#define VS1053_CARDCS 24     // Card chip select pin
-// DREQ should be an Int pin, see http://arduino.cc/en/Reference/attachInterrupt
-#define VS1053_DREQ 25       // VS1053 Data request, ideally an Interrupt pin
-
-Adafruit_VS1053 musicPlayer =
-  // create breakout-example object!
+Adafruit_VS1053 vs_codec =
   Adafruit_VS1053(VS1053_RESET, VS1053_CS, VS1053_DCS, VS1053_DREQ);
 
-#define VS1053_MIDI Serial3
+
 #define VS1053_BANK_MELODY 0x79
 #define VS1053_GM1_OCARINA 80
 
@@ -95,36 +60,201 @@ void midiSetChannelBank(uint8_t chan, uint8_t bank) {
   VS1053_MIDI.write(bank);
 }
 
+SdFat  SD;
+MD_MIDIFile SMF;
+
+// The files in the tune list should be located on the SD card 
+// or an error will occur opening the file and the next in the 
+// list will be opened (skips errors).
+const char *tuneList[] = 
+{
+  "sandstorm.mid",  // simplest and shortest file
+  "pirates.mid",
+};
+const uint16_t WAIT_DELAY = 2000; // ms
+
+void midiCallback(midi_event *pev)
+// Called by the MIDIFile library when a file event needs to be processed
+// thru the midi communications interface.
+// This callback is set up in the setup() function.
+{
+  if ((pev->data[0] >= 0x80) && (pev->data[0] <= 0xe0))
+  {
+    VS1053_MIDI.write(pev->data[0] | pev->channel);
+    VS1053_MIDI.write(&pev->data[1], pev->size-1);
+  }
+  else
+    VS1053_MIDI.write(pev->data, pev->size);
+}
+
+void midiSilence(void)
+// Turn everything off on every channel.
+// Some midi files are badly behaved and leave notes hanging, so between songs turn
+// off all the notes and sound
+{
+  midi_event ev;
+
+  // All sound off
+  // When All Sound Off is received all oscillators will turn off, and their volume
+  // envelopes are set to zero as soon as possible.
+  ev.size = 0;
+  ev.data[ev.size++] = 0xb0;
+  ev.data[ev.size++] = 120;
+  ev.data[ev.size++] = 0;
+
+  for (ev.channel = 0; ev.channel < 16; ev.channel++)
+    midiCallback(&ev);
+}
+
+void midifile_setup(void)
+{
+  // Set up LED pins
+  pinMode(READY_LED, OUTPUT);
+  pinMode(SD_ERROR_LED, OUTPUT);
+  pinMode(SMF_ERROR_LED, OUTPUT);
+  pinMode(BEAT_LED, OUTPUT);
+
+  // reset LEDs
+  digitalWrite(READY_LED, LOW);
+  digitalWrite(SD_ERROR_LED, LOW);
+  digitalWrite(SMF_ERROR_LED, LOW);
+  digitalWrite(BEAT_LED, LOW);
+
+  SdioConfig sd_config;
+  // Initialize SD
+  if (!SD.begin(sd_config))
+  {
+    digitalWrite(SD_ERROR_LED, HIGH);
+    while (true)
+      Serial.println("SD init failed");
+  }
+
+  // Initialize MIDIFile
+  SMF.begin(&SD);
+  SMF.setMidiHandler(midiCallback);
+  
+  digitalWrite(READY_LED, HIGH);
+}
+
+void tickMetronome(void)
+// flash a LED to the beat
+{
+  static uint32_t lastBeatTime = 0;
+  static boolean  inBeat = false;
+  uint16_t  beatTime;
+
+  beatTime = 60000/SMF.getTempo();    // msec/beat = ((60sec/min)*(1000 ms/sec))/(beats/min)
+  if (!inBeat)
+  {
+    if ((millis() - lastBeatTime) >= beatTime)
+    {
+      lastBeatTime = millis();
+      digitalWrite(BEAT_LED, HIGH);
+      inBeat = true;
+    }
+  }
+  else
+  {
+    if ((millis() - lastBeatTime) >= 100) // keep the flash on for 100ms only
+    {
+      digitalWrite(BEAT_LED, LOW);
+      inBeat = false;
+    }
+  }
+}
+
+void midifile_loop(void)
+{
+  static enum { S_IDLE, S_PLAYING, S_END, S_WAIT_BETWEEN } state = S_IDLE;
+  static uint16_t currTune = ARRAY_SIZE(tuneList);
+  static uint32_t timeStart;
+
+  switch (state)
+  {
+  case S_IDLE:    // now idle, set up the next tune
+    {
+      int err;
+
+      digitalWrite(READY_LED, LOW);
+      digitalWrite(SMF_ERROR_LED, LOW);
+
+      currTune++;
+      if (currTune >= ARRAY_SIZE(tuneList))
+        currTune = 0;
+
+      // use the next file name and play it
+      err = SMF.load(tuneList[currTune]);
+      if (err != MD_MIDIFile::E_OK)
+      {
+        digitalWrite(SMF_ERROR_LED, HIGH);
+        timeStart = millis();
+        state = S_WAIT_BETWEEN;
+      }
+      else
+      {
+        state = S_PLAYING;
+      }
+    }
+    break;
+
+  case S_PLAYING: // play the file
+    if (!SMF.isEOF())
+    {
+      if (SMF.getNextEvent())
+        tickMetronome();
+    }
+    else
+      state = S_END;
+    break;
+
+  case S_END:   // done with this one
+    SMF.close();
+    midiSilence();
+    timeStart = millis();
+    state = S_WAIT_BETWEEN;
+    break;
+
+  case S_WAIT_BETWEEN:    // signal finished with a dignified pause
+    digitalWrite(READY_LED, HIGH);
+    if (millis() - timeStart >= WAIT_DELAY)
+      state = S_IDLE;
+    break;
+
+  default:
+    state = S_IDLE;
+    break;
+  }
+}
+
 void VS1053_init()
 {
   delay(100);
-  if (! musicPlayer.begin()) { // initialise the music player
+  if (! vs_codec.begin()) { // initialise the music player
       Serial.println(F("Couldn't find VS1053, do you have the right pins defined?"));
   }
   Serial.println("VS1053 found");
-
   // Magic stuff to enable I2S based on datasheet
-  musicPlayer.sciWrite(0x7, 0xC017);
-  musicPlayer.sciWrite(0x6, 0x00F0);
+  vs_codec.sciWrite(0x7, 0xC017);
+  vs_codec.sciWrite(0x6, 0x00F0);
 
   // Enable I2S, start with WRAMADDR
-  musicPlayer.sciWrite(0x7, 0xC040);
+  vs_codec.sciWrite(0x7, 0xC040);
   // Then WRAM
-  musicPlayer.sciWrite(0x6, 0x000E);
-  musicPlayer.applyPatch(patches_plugin, PATCHES_PLUGIN_SIZE);// Add here
+  vs_codec.sciWrite(0x6, 0x000E); // PUT E FOR 192KHZ
+  vs_codec.applyPatch(patches_plugin, PATCHES_PLUGIN_SIZE);// Add here
   // Start the patches
   while(digitalRead(VS1053_DREQ) == 0);
-  musicPlayer.applyPatch(midistart_plugin, MIDISTART_PLUGIN_SIZE);// Add here
+  vs_codec.applyPatch(midistart_plugin, MIDISTART_PLUGIN_SIZE);// Add here
 //  // Start midi plugin
-//  musicPlayer.sciWrite(0xA, 0x50);
+//  vs_codec.sciWrite(0xA, 0x50);
   delay(50);
   
-  musicPlayer.applyPatch(admix_plugin, ADMIX_PLUGIN_SIZE);// Add here
+  vs_codec.applyPatch(admix_plugin, ADMIX_PLUGIN_SIZE);// Add here
 
   // Start the ADMIX plugin
   // Lower gain
-  musicPlayer.sciWrite(0xC, 0xFFFD);
-  musicPlayer.sciWrite(0xA, 0x0F00);
+  vs_codec.sciWrite(0xC, 0xFFFD);
+  vs_codec.sciWrite(0xA, 0x0F00);
   while(digitalRead(VS1053_DREQ) == 0)
   {
     Serial.println("Waiting for ADMIX start");
@@ -157,11 +287,51 @@ void midiNoteOff(uint8_t chan, uint8_t n, uint8_t vel) {
   VS1053_MIDI.write(vel);
 }
 
+AudioLCD lcd;
+
+std::array<String, FILES_PER_PAGE> probe_sd_files()
+{
+  std::array<String, FILES_PER_PAGE> ret_arr;
+  int file_count = 0;
+  char name_buf[50];
+  File file;
+  File dir;
+  // Open root directory
+  dir.open("/");
+  while (file.openNext(&dir, O_READ) && file_count < FILES_PER_PAGE)
+  {
+    file.getName(name_buf, sizeof(name_buf));
+    size_t name_size = strlen(name_buf);
+    if (name_size == sizeof(name_buf))
+      Serial.println("WARNING: buffer overflow in name size");
+    if (file.isDir())
+    {
+      Serial.println("WARNING: Found a folder, skipping");
+    }
+    else
+    {
+      // Check extension
+      if (strstr(strlwr(name_buf + (name_size - 4)), ".mid"))
+      {
+        Serial.print("Found midi file: ");
+        Serial.println(name_buf);
+        ret_arr[file_count] = String(name_buf);
+        ++file_count;
+      }
+    }
+    file.close();
+  }
+  return ret_arr;
+}
+
 void setup() {
   Serial.begin(115200);
+  midifile_setup();
+  int tmp = 0;
+  lcd.printMenu(tmp);
   delay(2000);
   pinMode(VS1053_DREQ, INPUT);
-  // Initialize VS1052 chip
+  // Initialize VS1053 chip
   VS1053_init();
 
   // Wait 1.5 seconds before turning on USB Host.  If connected USB devices
@@ -171,6 +341,9 @@ void setup() {
   Serial.println("USB Host InputFunctions example");
   delay(10);
   myusb.begin();
+
+  // Find all the files in the SD card
+//  lcd.setS  dFiles(probe_sd_files());
 
   midi1.setHandleNoteOn(myNoteOn);
   midi1.setHandleNoteOff(myNoteOff);
@@ -233,9 +406,11 @@ void loop() {
   // data and run the handler functions as messages arrive.
   myusb.Task();
   midi1.read();
+  midifile_loop();
+  lcd.update();
   // Check if it's time to send the pitch bend value
-  if (pitch_bend_sampler.check())
-    samplePitchBend();
+//  if (pitch_bend_sampler.check())
+//    samplePitchBend();
 }
 
 
